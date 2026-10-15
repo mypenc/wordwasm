@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   sync:
+    # Only run in the mypenc/wordwasm repo, never in copies or forks.
+    if: github.repository == 'mypenc/wordwasm'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,4 +45,4 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run pages.yml --ref main
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
