@@ -980,7 +980,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // View › Switch Modes: dark paper, inverted document colours.
     let dark_page = app.session.view.dark_mode;
     let dark_paper = wordcraft_render::DARK_PAPER;
-    let show_ruler = app.session.view.ruler && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode;
+    let show_ruler = app.session.view.ruler
+        && app.session.view.mode == wordcraft_layout::ViewMode::Print
+        && !app.session.view.read_mode
+        && crate::chrome::Screen::of(&app.session.view) == crate::chrome::Screen::Normal;
     let (hruler, vruler, area) = if show_ruler {
         let h = Rect::from_min_max(pos2(full.min.x + RULER, full.min.y), pos2(full.max.x, full.min.y + RULER));
         let v = Rect::from_min_max(pos2(full.min.x, full.min.y + RULER), pos2(full.min.x + RULER, full.max.y));
@@ -1191,6 +1194,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // A fixed id: an automatic one follows how many widgets came before, which Read Mode's
         // chrome changes, and a new id dropped the keyboard focus, so the arrows, Page Up/Down
         // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
+        // It also keeps the focus when Focus hides the rulers (#1678).
         ui.advance_cursor_after_rect(content);
         let resp = ui.interact(content, egui::Id::new("wordcraft_canvas"), Sense::click_and_drag());
         if let Some(tr) = scroll_target {
@@ -3217,6 +3221,9 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if object {
         ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
     }
+    if crate::widgets::enabled(app, "shape.fill") {
+        item(ui, app, "Format Shape…", "view.formatShapePane", json!({"value": true}));
+    }
     if app.session.sel.focus.path.cell().is_some() {
         // The table's items follow what is selected, as in Word (2019, Windows).
         let pick = table_pick(&app.session);
@@ -4676,6 +4683,49 @@ mod tests {
         }
         let o = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap().1;
         assert_eq!(o.frame().unwrap().2.wrap, wordcraft_doc::para::Wrap::Square);
+    }
+
+    /// #1500: right-clicking a selected shape offers Format Shape…, which opens the Format Shape
+    /// pane and leaves that shape selected.
+    #[test]
+    fn right_click_on_a_shape_opens_the_format_shape_pane() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Text before the shape "})).unwrap();
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert!(crate::widgets::enabled(h.state(), "shape.fill"), "Shape Fill applies to the selected shape");
+        assert!(!h.state().session.view.format_shape_pane, "the pane starts closed");
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the shape is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        // A menu item's label ends with its (empty) shortcut column; the ribbon's own Format
+        // Shape… launcher has none, so this names the context menu's entry only.
+        let entry = "Format Shape… ";
+        assert!(h.query_by_label(entry).is_none(), "no context menu yet");
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        h.get_by_label(entry).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(h.state().session.view.format_shape_pane, "Format Shape… opened the pane");
+        let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+        assert_eq!(picked, Some(pos), "the same shape stays selected");
     }
 
     /// #1197: the context menu on a table of contents entry offers Update Field, as in Word, and
