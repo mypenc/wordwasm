@@ -173,6 +173,10 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop: the app's own user templates folder (`Templates` in the settings folder, #2852),
+    /// used while File › Options names none. File › New lists personal templates from it and Save
+    /// as Word Template starts in it. `None` (web) hides personal templates.
+    pub templates_dir: Option<std::path::PathBuf>,
 }
 
 /// How Save in the Save Changes prompt went.
@@ -571,8 +575,9 @@ pub struct WordApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
-    /// The interface language whose editing language the session last got ([`i18n::Lang::editing_lang`]).
-    applied_editing: Option<i18n::Lang>,
+    /// The interface language and the editing language the session last got for it
+    /// ([`i18n::Lang::editing_lang`], or for English the region's English).
+    applied_editing: Option<(i18n::Lang, Option<String>)>,
     /// What the system last said about its animation effects ([`Services::animations_enabled`]).
     system_animations: Option<bool>,
     /// Whether egui's own animations were last switched on or off ([`theme::apply_animations`]).
@@ -1675,6 +1680,12 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            // File › Save As › Save as Word Template (#2852): the Save dialog for a .dotx, in the
+            // user templates folder. Opens system UI, like `ui.openFileDialog`.
+            "ui.saveAsTemplate" => {
+                let dir = self.save_as_template_dialog();
+                json!({"dir": dir})
+            }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
             // (desktop only): `purpose` is document (default), picture, recipients or save. A system
             // dialog still waiting for an answer is given up as cancelled.
@@ -1966,9 +1977,16 @@ impl WordApp {
         i18n::set_current(lang);
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
-        if self.applied_editing != Some(lang) {
-            self.session.set_editing_language(lang.editing_lang());
-            self.applied_editing = Some(lang);
+        // An English interface writes the region's English (English (UK) on a British system,
+        // #1045).
+        let editing = match lang.editing_lang() {
+            Some(t) => Some(t.to_string()),
+            None if lang.code() == "en" => self.session.region_english(),
+            None => None,
+        };
+        if self.applied_editing.as_ref().is_none_or(|(l, e)| *l != lang || *e != editing) {
+            self.session.set_editing_language(editing.as_deref());
+            self.applied_editing = Some((lang, editing));
         }
         options::sync(self);
         self.settle_async_saves();
@@ -2621,6 +2639,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
     matches!(
         id,
         "file.new"
+            | "file.newFromTemplate"
+            | "file.listTemplates"
             | "file.open"
             | "file.close"
             | "file.options"
@@ -2677,13 +2697,13 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
     ) || discards_document(id, params)
 }
 
-/// User commands that replace or close the document (`file.open` without a path only shows the
+/// User commands that replace or close the document (New, also from a template; `file.open` without a path only shows the
 /// file picker; the open that follows is checked). Envelopes, Labels and Finish & Merge make a
 /// new document in its place; a merge written to a file (`path`) and an envelope added to this
 /// document (`add`) leave it alone.
 pub(crate) fn discards_document(id: &str, params: &Value) -> bool {
     match id {
-        "file.new" | "file.close" | "mailings.labels" => true,
+        "file.new" | "file.newFromTemplate" | "file.close" | "mailings.labels" => true,
         "mailings.envelopes" => params.get("add").and_then(Value::as_bool) != Some(true),
         "file.open" => params.get("path").is_some(),
         "file.recover" => params.get("restore").is_some(),

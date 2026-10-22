@@ -552,6 +552,10 @@ pub struct Prefs {
     /// Proofing, #1063): an app started from Finder or the Dock doesn't see
     /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
     pub dictionaries_folder: Option<String>,
+    /// The user templates folder File › New lists personal templates from and Save as Word
+    /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
+    /// own `Templates` folder in its settings folder.
+    pub user_templates_folder: Option<String>,
     /// Formatting marks shown even while Show/Hide ¶ is off.
     pub marks: wordcraft_layout::display::FormattingMarks,
     /// Mark grammar errors as you type (with Check spelling as you type on).
@@ -577,6 +581,7 @@ impl Default for Prefs {
             units: Default::default(),
             region: None,
             dictionaries_folder: None,
+            user_templates_folder: None,
             marks: Default::default(),
             mark_grammar: true,
             ignore_uppercase: true,
@@ -1103,6 +1108,17 @@ impl Session {
             Some(tag) => wordcraft_geom::Region::from_tag(tag),
             None => self.system_region.clone(),
         }
+    }
+
+    /// The English of the region in effect (`en-GB` for a British region), or `None` when the
+    /// region's language isn't English, it names no territory, or it is the United States (US
+    /// English is the default anyway). An English interface writes new documents in it, as Word
+    /// does on a British or Canadian system (#1045).
+    pub fn region_english(&self) -> Option<String> {
+        let r = self.region();
+        (r.language == "en" && !r.territory.is_empty() && r.territory != "US")
+            .then(|| format!("en-{}", r.territory))
+            .and_then(|t| wordcraft_proof::lang::normalize_tag(&t))
     }
 
     /// The unit rulers and dialogs show lengths in: the user's choice, else the region's.
