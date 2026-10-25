@@ -340,6 +340,18 @@ fn pcl6_symbol_roundtrip() {
 }
 
 #[test]
+fn sym_hex_prefixes_and_break_type_casing() {
+    let body = r##"
+<w:p>
+ <w:r><w:sym w:font="Wingdings" w:char="0xF0FC"/><w:sym w:font="Symbol" w:char="U+F061"/><w:sym w:font="Webdings" w:char="#xF061"/></w:r>
+ <w:r><w:br w:type="Page"/><w:br w:type="Column"/><w:br w:type="textWrapping"/></w:r>
+</w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = paras(&d);
+    assert_eq!(p[0].plain_text(), "\u{F0FC}\u{F061}\u{F061}\u{C}\u{E}\n");
+}
+
+#[test]
 fn alternate_content_choice_and_fallback() {
     let body = r#"
 <w:p><w:r><mc:AlternateContent>
@@ -3569,6 +3581,22 @@ fn html_auto_spacing_off_is_read_and_kept() {
         (d.settings.sum_paragraph_spacing, again.settings.sum_paragraph_spacing)
     };
     assert_eq!(settings("<w:doNotUseHTMLParagraphAutoSpacing/>"), (true, true));
+    assert_eq!(settings(""), (false, false));
+}
+
+/// `w:doNotExpandShiftReturn` in the settings' `w:compat`: justified lines ending in a manual line
+/// break keep their spacing (#3924).
+#[test]
+fn do_not_expand_shift_return_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
+    };
+    assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
+    assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
     assert_eq!(settings(""), (false, false));
 }
 
